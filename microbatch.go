@@ -20,7 +20,13 @@ type FutureResult struct {
 
 // Get blocks until the job result is available and then returns it.
 func (fr *FutureResult) Get() JobResult {
-	return <-fr.resultChan
+	select {
+	case res := <-fr.resultChan:
+		return res
+	default:
+		fmt.Println("not available")
+		return nil
+	}
 }
 
 // Generic processor
@@ -39,6 +45,7 @@ type MicroBatch struct {
 	results        []*FutureResult
 	config         Config
 	batchProcessor BatchProcessor
+	flushTicker    *time.Ticker
 }
 
 // Constructor
@@ -48,7 +55,9 @@ func NewMicroBatch(batchProcessor BatchProcessor, config Config) *MicroBatch {
 		batchProcessor: batchProcessor,
 		jobs:           make([]Job, 0, config.BatchSize),
 		results:        make([]*FutureResult, 0, config.BatchSize),
+		flushTicker:    time.NewTicker(config.FlushTimeout),
 	}
+	go batcher.run()
 	return &batcher
 }
 
@@ -85,6 +94,15 @@ func (mb *MicroBatch) FlushBatch() {
 	}
 }
 
+func (mb *MicroBatch) run() {
+	for {
+		select {
+		case <-mb.flushTicker.C:
+			mb.FlushBatch()
+		}
+	}
+}
+
 // Mock Implementation
 
 type mockBatchProcessor struct {
@@ -101,9 +119,14 @@ func (mbp *mockBatchProcessor) ProcessBatch(jobs []Job) []JobResult {
 func main() {
 	exampleBatchProcessor := mockBatchProcessor{}
 
-	microBatcher := NewMicroBatch(&exampleBatchProcessor, Config{BatchSize: 2})
+	microBatcher := NewMicroBatch(&exampleBatchProcessor, Config{BatchSize: 2, FlushTimeout: 10000 * time.Millisecond})
 
 	jr1 := microBatcher.SubmitJob("job1")
+
+	time.Sleep(1 * time.Second)
+	fmt.Println(jr1)
+	fmt.Println(jr1.Get())
+
 	jr2 := microBatcher.SubmitJob("job2")
 
 	fmt.Println(jr1.Get())
