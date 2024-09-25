@@ -1,6 +1,7 @@
-package main
+package microbatch
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -18,16 +19,18 @@ type FutureResult struct {
 	resultChan chan JobResult
 }
 
-// Get blocks until the job result is available and then returns it.
+// Get returns an answer if available or nil.
 func (fr *FutureResult) Get() JobResult {
 	select {
 	case res := <-fr.resultChan:
 		return res
 	default:
-		fmt.Println("not available")
+		fmt.Println("result not yet available")
 		return nil
 	}
 }
+
+var ErrInShutdown = errors.New("Job not processed, batcher in shutdown state")
 
 // Generic processor
 type BatchProcessor interface {
@@ -46,6 +49,8 @@ type MicroBatch struct {
 	config         Config
 	batchProcessor BatchProcessor
 	flushTicker    *time.Ticker
+	shutdown       chan bool
+	inShutdown     bool
 }
 
 // Constructor
@@ -56,13 +61,18 @@ func NewMicroBatch(batchProcessor BatchProcessor, config Config) *MicroBatch {
 		jobs:           make([]Job, 0, config.BatchSize),
 		results:        make([]*FutureResult, 0, config.BatchSize),
 		flushTicker:    time.NewTicker(config.FlushTimeout),
+		shutdown:       make(chan bool),
 	}
 	go batcher.run()
 	return &batcher
 }
 
 // Submit a job, get a Future that eventually can Get() a result
-func (mb *MicroBatch) SubmitJob(job Job) *FutureResult {
+func (mb *MicroBatch) SubmitJob(job Job) (*FutureResult, error) {
+
+	if mb.inShutdown {
+		return &FutureResult{}, ErrInShutdown
+	}
 
 	futureResult := &FutureResult{
 		resultChan: make(chan JobResult, 1),
@@ -75,7 +85,7 @@ func (mb *MicroBatch) SubmitJob(job Job) *FutureResult {
 		mb.FlushBatch()
 	}
 
-	return futureResult
+	return futureResult, nil
 }
 
 // Flush jobs to batchprocessor
@@ -97,38 +107,17 @@ func (mb *MicroBatch) FlushBatch() {
 func (mb *MicroBatch) run() {
 	for {
 		select {
+		case <-mb.shutdown:
+			mb.inShutdown = true
+			mb.FlushBatch()
 		case <-mb.flushTicker.C:
 			mb.FlushBatch()
 		}
 	}
 }
 
-// Mock Implementation
-
-type mockBatchProcessor struct {
-}
-
-func (mbp *mockBatchProcessor) ProcessBatch(jobs []Job) []JobResult {
-	results := make([]JobResult, len(jobs))
-	for i, job := range jobs {
-		results[i] = job.(string) + "_processed"
-	}
-	return results
-}
-
-func main() {
-	exampleBatchProcessor := mockBatchProcessor{}
-
-	microBatcher := NewMicroBatch(&exampleBatchProcessor, Config{BatchSize: 2, FlushTimeout: 10000 * time.Millisecond})
-
-	jr1 := microBatcher.SubmitJob("job1")
-
-	time.Sleep(1 * time.Second)
-	fmt.Println(jr1)
-	fmt.Println(jr1.Get())
-
-	jr2 := microBatcher.SubmitJob("job2")
-
-	fmt.Println(jr1.Get())
-	fmt.Println(jr2.Get())
+func (mb *MicroBatch) Shutdown() {
+	fmt.Println("batcher received shutdown")
+	mb.shutdown <- true
+	close(mb.shutdown)
 }
