@@ -2,7 +2,8 @@ package microbatch
 
 import (
 	"errors"
-	"fmt"
+	"log"
+	"sync"
 	"time"
 )
 
@@ -19,15 +20,9 @@ type FutureResult struct {
 	resultChan chan JobResult
 }
 
-// Get returns an answer if available or nil.
+// Get returns an answer if available
 func (fr *FutureResult) Get() JobResult {
-	select {
-	case res := <-fr.resultChan:
-		return res
-	default:
-		fmt.Println("result not yet available")
-		return nil
-	}
+	return <-fr.resultChan
 }
 
 var ErrInShutdown = errors.New("Job not processed, batcher in shutdown state")
@@ -49,8 +44,9 @@ type MicroBatch struct {
 	config         Config
 	batchProcessor BatchProcessor
 	flushTicker    *time.Ticker
-	shutdown       chan bool
 	inShutdown     bool
+	wg             sync.WaitGroup
+	mu             sync.Mutex
 }
 
 // Constructor
@@ -61,7 +57,6 @@ func NewMicroBatch(batchProcessor BatchProcessor, config Config) *MicroBatch {
 		jobs:           make([]Job, 0, config.BatchSize),
 		results:        make([]*FutureResult, 0, config.BatchSize),
 		flushTicker:    time.NewTicker(config.FlushTimeout),
-		shutdown:       make(chan bool),
 	}
 	go batcher.run()
 	return &batcher
@@ -69,9 +64,11 @@ func NewMicroBatch(batchProcessor BatchProcessor, config Config) *MicroBatch {
 
 // Submit a job, get a Future that eventually can Get() a result
 func (mb *MicroBatch) SubmitJob(job Job) (*FutureResult, error) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
 
 	if mb.inShutdown {
-		return &FutureResult{}, ErrInShutdown
+		return nil, ErrInShutdown
 	}
 
 	futureResult := &FutureResult{
@@ -81,15 +78,19 @@ func (mb *MicroBatch) SubmitJob(job Job) (*FutureResult, error) {
 	mb.jobs = append(mb.jobs, job)
 	mb.results = append(mb.results, futureResult)
 
+	mb.wg.Add(1)
 	if len(mb.jobs) == mb.config.BatchSize {
-		mb.FlushBatch()
+		mb.flushBatch()
 	}
 
 	return futureResult, nil
 }
 
 // Flush jobs to batchprocessor
-func (mb *MicroBatch) FlushBatch() {
+func (mb *MicroBatch) flushBatch() {
+	if len(mb.jobs) == 0 {
+		return
+	}
 
 	jobsToProcess := mb.jobs
 	resultsToProcess := mb.results
@@ -101,23 +102,38 @@ func (mb *MicroBatch) FlushBatch() {
 	for i, result := range results {
 		resultsToProcess[i].resultChan <- result
 		close(resultsToProcess[i].resultChan)
+		mb.wg.Done()
 	}
 }
 
 func (mb *MicroBatch) run() {
+
 	for {
 		select {
-		case <-mb.shutdown:
-			mb.inShutdown = true
-			mb.FlushBatch()
 		case <-mb.flushTicker.C:
-			mb.FlushBatch()
+			mb.mu.Lock()
+			mb.flushBatch()
+			mb.mu.Unlock()
 		}
 	}
 }
 
 func (mb *MicroBatch) Shutdown() {
-	fmt.Println("batcher received shutdown")
-	mb.shutdown <- true
-	close(mb.shutdown)
+	mb.mu.Lock()
+	if mb.inShutdown {
+		mb.mu.Unlock()
+		return
+	}
+	mb.inShutdown = true
+	mb.mu.Unlock()
+
+	log.Println("batcher received shutdown")
+	mb.mu.Lock()
+	mb.flushBatch() //Process previously submitted jobs
+	mb.mu.Unlock()
+
+	mb.flushTicker.Stop()
+
+	mb.wg.Wait()
+	log.Println("Previously submitted jobs processed")
 }
