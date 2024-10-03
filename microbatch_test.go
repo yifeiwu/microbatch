@@ -24,9 +24,9 @@ func (mbp *mockBatchProcessor) ProcessBatch(jobs []mb.Job) []mb.JobResult {
 // Processes a batch when time greater than FlushTimeout but batches is less than BatchSize
 func TestMicroBatcherFlushTimeout(t *testing.T) {
 
-	exampleBatchProcessor := mockBatchProcessor{}
+	mockBatchProcessor := mockBatchProcessor{}
 
-	microBatcher := mb.NewMicroBatch(&exampleBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 50 * time.Millisecond})
+	microBatcher := mb.NewMicroBatch(&mockBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 50 * time.Millisecond})
 
 	jr1, err1 := microBatcher.SubmitJob("job1")
 	assert.NoError(t, err1)
@@ -40,9 +40,9 @@ func TestMicroBatcherFlushTimeout(t *testing.T) {
 // Processes a batch when time less than FlushTimeout but batch is full
 func TestMicroBatcherBatchMax(t *testing.T) {
 
-	exampleBatchProcessor := mockBatchProcessor{}
+	mockBatchProcessor := mockBatchProcessor{}
 
-	microBatcher := mb.NewMicroBatch(&exampleBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 500 * time.Millisecond})
+	microBatcher := mb.NewMicroBatch(&mockBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 500 * time.Millisecond})
 
 	jr1, _ := microBatcher.SubmitJob("job1")
 	jr2, _ := microBatcher.SubmitJob("job2")
@@ -55,8 +55,8 @@ func TestMicroBatcherBatchMax(t *testing.T) {
 }
 
 func TestMicroBatchConcurrentSubmissions(t *testing.T) {
-	exampleBatchProcessor := mockBatchProcessor{}
-	microBatcher := mb.NewMicroBatch(&exampleBatchProcessor, mb.Config{BatchSize: 5, FlushTimeout: 500 * time.Millisecond})
+	mockBatchProcessor := mockBatchProcessor{}
+	microBatcher := mb.NewMicroBatch(&mockBatchProcessor, mb.Config{BatchSize: 5, FlushTimeout: 200 * time.Millisecond})
 
 	var wg sync.WaitGroup
 	jobs := []string{"job1", "job2", "job3", "job4", "job5"}
@@ -76,11 +76,12 @@ func TestMicroBatchConcurrentSubmissions(t *testing.T) {
 }
 
 // Returns an error if submitting a job during shutdown
+// Process previous jobs
 func TestMicroBatcherSubmitJobOnShutdown(t *testing.T) {
 
-	exampleBatchProcessor := mockBatchProcessor{}
+	mockBatchProcessor := mockBatchProcessor{}
 
-	microBatcher := mb.NewMicroBatch(&exampleBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 500 * time.Millisecond})
+	microBatcher := mb.NewMicroBatch(&mockBatchProcessor, mb.Config{BatchSize: 2, FlushTimeout: 200 * time.Millisecond})
 
 	jr1, _ := microBatcher.SubmitJob("job1")
 
