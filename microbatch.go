@@ -81,6 +81,8 @@ func (mb *MicroBatch) SubmitJob(job Job) (*FutureResult, error) {
 	mb.wg.Add(1)
 	if len(mb.jobs) == mb.config.BatchSize {
 		mb.flushBatch()
+		// Reset ticker to make flush behavior more consistent with expectations
+		mb.flushTicker.Reset(mb.config.FlushTimeout)
 	}
 
 	return futureResult, nil
