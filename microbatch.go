@@ -45,7 +45,6 @@ type MicroBatch struct {
 	batchProcessor BatchProcessor
 	flushTicker    *time.Ticker
 	inShutdown     bool
-	wg             sync.WaitGroup
 	mu             sync.Mutex
 	done           chan struct{}
 }
@@ -80,7 +79,6 @@ func (mb *MicroBatch) SubmitJob(job Job) (*FutureResult, error) {
 	mb.jobs = append(mb.jobs, job)
 	mb.results = append(mb.results, futureResult)
 
-	mb.wg.Add(1)
 	if len(mb.jobs) == mb.config.BatchSize {
 		mb.flushBatch()
 		// Reset ticker to make flush behavior more consistent with expectations
@@ -106,7 +104,6 @@ func (mb *MicroBatch) flushBatch() {
 	for i, result := range results {
 		resultsToProcess[i].resultChan <- result
 		close(resultsToProcess[i].resultChan)
-		mb.wg.Done()
 	}
 }
 
@@ -131,14 +128,11 @@ func (mb *MicroBatch) Shutdown() {
 		return
 	}
 	mb.inShutdown = true
-	mb.mu.Unlock()
 
 	log.Println("batcher received shutdown")
-	mb.mu.Lock()
 	mb.flushBatch() //Process previously submitted jobs
 	mb.mu.Unlock()
 
 	close(mb.done)
-	mb.wg.Wait()
 	log.Println("Previously submitted jobs processed")
 }
