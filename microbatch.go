@@ -47,6 +47,7 @@ type MicroBatch struct {
 	inShutdown     bool
 	wg             sync.WaitGroup
 	mu             sync.Mutex
+	done           chan struct{}
 }
 
 // Constructor
@@ -57,6 +58,7 @@ func NewMicroBatch(batchProcessor BatchProcessor, config Config) *MicroBatch {
 		jobs:           make([]Job, 0, config.BatchSize),
 		results:        make([]*FutureResult, 0, config.BatchSize),
 		flushTicker:    time.NewTicker(config.FlushTimeout),
+		done:           make(chan struct{}),
 	}
 	go batcher.run()
 	return &batcher
@@ -109,6 +111,7 @@ func (mb *MicroBatch) flushBatch() {
 }
 
 func (mb *MicroBatch) run() {
+	defer mb.flushTicker.Stop()
 
 	for {
 		select {
@@ -116,10 +119,11 @@ func (mb *MicroBatch) run() {
 			mb.mu.Lock()
 			mb.flushBatch()
 			mb.mu.Unlock()
+		case <-mb.done:
+			return
 		}
 	}
 }
-
 func (mb *MicroBatch) Shutdown() {
 	mb.mu.Lock()
 	if mb.inShutdown {
@@ -134,8 +138,7 @@ func (mb *MicroBatch) Shutdown() {
 	mb.flushBatch() //Process previously submitted jobs
 	mb.mu.Unlock()
 
-	mb.flushTicker.Stop()
-
+	close(mb.done)
 	mb.wg.Wait()
 	log.Println("Previously submitted jobs processed")
 }
